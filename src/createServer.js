@@ -3,7 +3,7 @@
 const express = require('express');
 const { Op } = require('sequelize');
 const {
-  models: { User, Expense },
+  models: { User, Expense, Category },
 } = require('./models/models');
 
 function createServer() {
@@ -64,6 +64,56 @@ function createServer() {
     res.sendStatus(204);
   });
 
+  // CATEGORIES
+  app.get('/categories', async (req, res) => {
+    res.json(await Category.findAll());
+  });
+
+  app.post('/categories', async (req, res) => {
+    const { name } = req.body;
+
+    if (!name) {
+      return res.sendStatus(400);
+    }
+
+    const newCategory = await Category.create({ name });
+
+    res.status(201).json(newCategory);
+  });
+
+  app.get('/categories/:id', async (req, res) => {
+    const category = await Category.findByPk(req.params.id);
+
+    if (!category) {
+      return res.sendStatus(404);
+    }
+    res.json(category);
+  });
+
+  app.patch('/categories/:id', async (req, res) => {
+    const category = await Category.findByPk(req.params.id);
+
+    if (!category) {
+      return res.sendStatus(404);
+    }
+
+    if (!req.body.name) {
+      return res.sendStatus(400);
+    }
+    await category.update({ name: req.body.name });
+    res.json(category);
+  });
+
+  app.delete('/categories/:id', async (req, res) => {
+    const category = await Category.findByPk(req.params.id);
+
+    if (!category) {
+      return res.sendStatus(404);
+    }
+    await category.destroy();
+    res.sendStatus(204);
+  });
+
   // --- EXPENSES ---
   app.get('/expenses', async (req, res) => {
     const { userId, categories, category, from, to } = req.query;
@@ -76,9 +126,12 @@ function createServer() {
     const rawCategories = categories || category;
 
     if (rawCategories) {
-      where.category = {
-        [Op.in]: rawCategories.split(',').map((c) => c.trim()),
-      };
+      const names = rawCategories.split(',').map((c) => c.trim());
+      const foundCategories = await Category.findAll({
+        where: { name: { [Op.in]: names } },
+      });
+
+      where.categoryId = { [Op.in]: foundCategories.map((c) => c.id) };
     }
 
     if (from || to) {
@@ -93,13 +146,36 @@ function createServer() {
       }
     }
 
-    const expenses = await Expense.findAll({ where });
+    const expenses = await Expense.findAll({
+      where,
+      include: [{ model: Category, attributes: ['name'] }],
+    });
 
-    res.json(expenses);
+    const result = expenses.map((e) => {
+      const plain = e.get({ plain: true });
+
+      return { ...plain, category: plain.category.name };
+    });
+
+    res.json(result);
+  });
+
+  app.get('/expenses/:id', async (req, res) => {
+    const expense = await Expense.findByPk(req.params.id, {
+      include: [{ model: Category, attributes: ['name'] }],
+    });
+
+    if (!expense) {
+      return res.sendStatus(404);
+    }
+
+    const plain = expense.get({ plain: true });
+
+    res.json({ ...plain, category: plain.category.name });
   });
 
   app.post('/expenses', async (req, res) => {
-    const { userId, amount, category, title, spentAt } = req.body;
+    const { userId, amount, category, categoryId, title, spentAt } = req.body;
 
     if (userId === undefined || amount === undefined || !title || !spentAt) {
       return res.sendStatus(400);
@@ -111,16 +187,37 @@ function createServer() {
       return res.sendStatus(400);
     }
 
+    let finalCategoryId = categoryId;
+    let categoryName = category;
+
+    if (!finalCategoryId && category) {
+      const [catInstance] = await Category.findOrCreate({
+        where: { name: category },
+      });
+
+      finalCategoryId = catInstance.id;
+      categoryName = catInstance.name;
+    }
+
+    if (!finalCategoryId) {
+      return res.sendStatus(400);
+    }
+
     const newExpense = await Expense.create({
       userId: Number(userId),
       amount: Number(amount),
+      categoryId: finalCategoryId,
       title,
       spentAt,
-      category: category || 'Other',
       note: req.body.note || null,
     });
 
-    res.status(201).json(newExpense);
+    const responseData = {
+      ...newExpense.get({ plain: true }),
+      category: categoryName,
+    };
+
+    res.status(201).json(responseData);
   });
 
   app.get('/expenses/:id', async (req, res) => {
@@ -148,7 +245,14 @@ function createServer() {
     }
 
     await expense.update(req.body);
-    res.json(await expense.reload());
+
+    const updated = await Expense.findByPk(req.params.id, {
+      include: [{ model: Category, attributes: ['name'] }],
+    });
+
+    const plain = updated.get({ plain: true });
+
+    res.json({ ...plain, category: plain.category.name });
   });
 
   app.delete('/expenses/:id', async (req, res) => {

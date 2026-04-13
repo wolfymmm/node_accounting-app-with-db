@@ -7,7 +7,11 @@ const Expense = sequelize.define(
   'expense',
   {
     amount: { type: DataTypes.INTEGER, allowNull: false },
-    category: { type: DataTypes.STRING, allowNull: false },
+    categoryId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: 'category_id',
+    },
     title: { type: DataTypes.STRING, allowNull: false },
     note: { type: DataTypes.TEXT },
     spentAt: {
