@@ -25,7 +25,7 @@ function createServer() {
 
     const newUser = await User.create({ name });
 
-    res.status(201).json(newUser);
+    res.status(201).json(newUser.get({ plain: true }));
   });
 
   app.get('/users/:id', async (req, res) => {
@@ -64,7 +64,7 @@ function createServer() {
     res.sendStatus(204);
   });
 
-  // CATEGORIES
+  // --- CATEGORIES ---
   app.get('/categories', async (req, res) => {
     res.json(await Category.findAll());
   });
@@ -78,7 +78,7 @@ function createServer() {
 
     const newCategory = await Category.create({ name });
 
-    res.status(201).json(newCategory);
+    res.status(201).json(newCategory.get({ plain: true }));
   });
 
   app.get('/categories/:id', async (req, res) => {
@@ -101,7 +101,7 @@ function createServer() {
       return res.sendStatus(400);
     }
     await category.update({ name: req.body.name });
-    res.json(category);
+    res.json(category.get({ plain: true }));
   });
 
   app.delete('/categories/:id', async (req, res) => {
@@ -152,9 +152,9 @@ function createServer() {
     });
 
     const result = expenses.map((e) => {
-      const plain = e.get({ plain: true });
+      const { categoryId, category: catObj, ...rest } = e.get({ plain: true });
 
-      return { ...plain, category: plain.category.name };
+      return { ...rest, category: catObj.name };
     });
 
     res.json(result);
@@ -169,13 +169,18 @@ function createServer() {
       return res.sendStatus(404);
     }
 
-    const plain = expense.get({ plain: true });
+    const {
+      categoryId,
+      category: catObj,
+      ...rest
+    } = expense.get({ plain: true });
 
-    res.json({ ...plain, category: plain.category.name });
+    res.json({ ...rest, category: catObj.name });
   });
 
   app.post('/expenses', async (req, res) => {
-    const { userId, amount, category, categoryId, title, spentAt } = req.body;
+    const { userId, amount, category, categoryId, title, spentAt, note } =
+      req.body;
 
     if (userId === undefined || amount === undefined || !title || !spentAt) {
       return res.sendStatus(400);
@@ -188,19 +193,22 @@ function createServer() {
     }
 
     let finalCategoryId = categoryId;
-    let categoryName = category;
+    let categoryName = category || 'Other';
 
-    if (!finalCategoryId && category) {
+    if (finalCategoryId) {
+      const cat = await Category.findByPk(finalCategoryId);
+
+      if (!cat) {
+        return res.sendStatus(400);
+      }
+      categoryName = cat.name;
+    } else {
       const [catInstance] = await Category.findOrCreate({
-        where: { name: category },
+        where: { name: categoryName },
       });
 
       finalCategoryId = catInstance.id;
       categoryName = catInstance.name;
-    }
-
-    if (!finalCategoryId) {
-      return res.sendStatus(400);
     }
 
     const newExpense = await Expense.create({
@@ -209,24 +217,15 @@ function createServer() {
       categoryId: finalCategoryId,
       title,
       spentAt,
-      note: req.body.note || null,
+      note: note || null,
     });
 
-    const responseData = {
-      ...newExpense.get({ plain: true }),
+    const { categoryId: _, ...rest } = newExpense.get({ plain: true });
+
+    res.status(201).json({
+      ...rest,
       category: categoryName,
-    };
-
-    res.status(201).json(responseData);
-  });
-
-  app.get('/expenses/:id', async (req, res) => {
-    const expense = await Expense.findByPk(req.params.id);
-
-    if (!expense) {
-      return res.sendStatus(404);
-    }
-    res.json(expense);
+    });
   });
 
   app.patch('/expenses/:id', async (req, res) => {
@@ -250,9 +249,13 @@ function createServer() {
       include: [{ model: Category, attributes: ['name'] }],
     });
 
-    const plain = updated.get({ plain: true });
+    const {
+      categoryId,
+      category: catObj,
+      ...rest
+    } = updated.get({ plain: true });
 
-    res.json({ ...plain, category: plain.category.name });
+    res.json({ ...rest, category: catObj.name });
   });
 
   app.delete('/expenses/:id', async (req, res) => {
